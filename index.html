@@ -543,6 +543,14 @@ async function loadStreet(){
       cells, free, used, lastCell,
     });
   }
+  // 格位圖層有、即時檔沒有的路段(例如成功路2段250巷23弄):也列出來,標「無即時」,免得以為那裡沒格子
+  for (const [code, g] of Object.entries(geo)) {
+    if (streets.has('S:' + code) || g.m || !g.nm) continue;
+    streets.set('S:' + code, {
+      id: 'S:' + code, code, kind: 'street', name: g.nm, area: g.a, lat: g.c[0], lng: g.c[1], geo: g,
+      fee: '', rate: null, start: '', end: '', carType: '小型車', tot: g.n, avail: -99, usage: NaN, cells: [], free: 0, used: 0, lastCell: null, noFeed: true,
+    });
+  }
   state.streets = streets;
   state.streetTime = latest;
   state.streetFetched = new Date();
@@ -550,13 +558,15 @@ async function loadStreet(){
 function streetAvailability(st){
   const total = st.tot || st.geo.n;
   let n = Number.isFinite(st.avail) && st.avail >= 0 ? st.avail : (st.cells.length ? st.free : null);
-  if (n === null) return { n:null, total, cls:'mute', label:'無感測' };
+  if (n === null) return { n:null, total, cls:'mute', label: st.noFeed ? '無即時' : '無感測' };
   if (n === 0) return { n, total, cls:'full', label:'已滿' };
   if (n <= 2 || (total > 0 && n / total < 0.1)) return { n, total, cls:'warn', label:'剩不多' };
   return { n, total, cls:'ok', label:'有車位' };
 }
 const getItem = id => id && id.startsWith('S:') ? state.streets.get(id) : state.byId.get(id);
-const rateText = p => p.kind === 'street' ? (p.rate !== null ? `${p.rate} 元/時` : esc(p.fee)) + ` · ${p.start}–${p.end}` : (p.rate !== null ? `${p.rate} 元/時` : '');
+const rateText = p => p.kind === 'street'
+  ? (p.noFeed ? `${p.tot} 格 · 不在即時檔` : (p.rate !== null ? `${p.rate} 元/時` : esc(p.fee)) + ` · ${p.start}–${p.end}`)
+  : (p.rate !== null ? `${p.rate} 元/時` : '');
 
 // ---------- Derived ----------
 // returns {n, total, cls, label}  cls: ok|warn|full|mute
@@ -676,7 +686,7 @@ function renderList(rows){
   }
   const html = [];
   for (const { p, a, d } of rows.slice(0, 150)) {
-    const n = a.n === null ? `<span class="n">${a.label}</span>` : `<span class="n">${a.n}<small>/${a.total}</small></span>`;
+    const n = a.n === null ? `<span class="n">${a.total ? `共 ${a.total} 格` : a.label}</span>` : `<span class="n">${a.n}<small>/${a.total}</small></span>`;
     html.push(`<li><button class="row" data-id="${p.id}" aria-current="${state.selected===p.id}">
       <div class="t">${state.fav.has(p.id)?'<span class="fav">★</span>':''}<span class="name">${esc(p.name)}</span></div>
       <div class="meta"><span class="dist">${fmtDist(d)}</span><span>${esc(p.area)}</span>${rateText(p)?`<span>${rateText(p)}</span>`:''}</div>
@@ -702,7 +712,9 @@ function renderStreetSheet(id){
       <div class="cells">${st.cells.map(c => `<i class="${c.s === '2' ? 'free' : c.s === '1' ? 'used' : 'fault'}"></i>`).join('')}</div>
       <div class="legend" style="margin-top:6px"><span><i style="background:var(--ok)"></i>空位</span><span><i style="background:var(--full);opacity:.55"></i>有車</span><span><i style="background:var(--mute);opacity:.5"></i>異常</span></div>
       <div class="gunsum">最後一筆感測 ${hhmm(st.lastCell)}。格位順序是感測器編號，不是路上的先後。</div>
-    </div>` : `<div class="gunsum">這條路段沒有感測器，只有總格數。</div>`;
+    </div>` : (st.noFeed
+      ? `<div class="gunsum">這條路段在停管處的格位圖層裡有 ${st.tot} 格，但<b>不在即時檔內</b>，拿不到剩餘數、費率與時段。現場以告示牌為準。</div>`
+      : `<div class="gunsum">這條路段沒有感測器，只有總格數。</div>`);
   $('#sheetbody').innerHTML = `
     <header>
       <div><h2>${esc(st.name)}</h2><div class="addr"><span class="area">${esc(st.area)}</span>路邊停車格 · ${st.carType}</div></div>
@@ -710,8 +722,8 @@ function renderStreetSheet(id){
     </header>
     <div class="slots">
       <div class="slot ${a.cls}"><div class="k">剩餘</div>${a.n === null ? `<span class="v">${a.label}</span>` : `<span class="v">${a.n}<small> / ${a.total}</small></span>`}</div>
-      <div class="slot"><div class="k">收費</div><span class="v" style="font-size:18px">${esc(st.fee)}</span></div>
-      <div class="slot"><div class="k">收費時段</div><span class="v" style="font-size:18px">${esc(st.start)}–${esc(st.end)}</span></div>
+      <div class="slot"><div class="k">收費</div><span class="v" style="font-size:18px">${st.fee ? esc(st.fee) : '—'}</span></div>
+      <div class="slot"><div class="k">收費時段</div><span class="v" style="font-size:18px">${st.start ? `${esc(st.start)}–${esc(st.end)}` : '—'}</span></div>
     </div>
     ${strip}
     <div class="actions">
@@ -722,7 +734,7 @@ function renderStreetSheet(id){
     <dl class="kv">
       <dt>使用率</dt><dd>${Number.isFinite(st.usage) && st.usage >= 0 ? Math.round(st.usage*100) + '%' : '—'}</dd>
       <dt>路段代碼</dt><dd>${esc(st.code)}</dd>
-      <dt>資料時間</dt><dd>${hhmm(state.streetTime)}（停管處路邊檔）</dd>
+      <dt>資料時間</dt><dd>${st.noFeed ? '格位圖層（每月更新）' : hhmm(state.streetTime) + '（停管處路邊檔）'}</dd>
     </dl>
   `;
   $('#closesheet').onclick = () => select(null);

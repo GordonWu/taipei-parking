@@ -113,6 +113,7 @@ def main():
     # 第二遍:沒 rdcode 的格位用路名對(SHP 自己的對照優先,其次 XML 名稱)
     groups = collections.defaultdict(list)
     areas = collections.defaultdict(collections.Counter)
+    rnames = collections.defaultdict(collections.Counter)
     attached = 0
     for rd, rn, pt, area, lat, lng in rows:
         if not rd:
@@ -125,23 +126,31 @@ def main():
             attached += 1
         groups[rd].append((lat, lng, pt))
         areas[rd][area] += 1
+        if rn:
+            rnames[rd][CLEAN.sub('', rn).strip()] += 1
 
     segs = {}
     ncell = 0
     for rd, cells in groups.items():
         # 汽車類優先;整段都沒汽車格(例如純機車路段)才用全部
-        cells = [c for c in cells if c[2] in CAR_TYPES] or cells
+        car = [c for c in cells if c[2] in CAR_TYPES]
+        cells = car or cells
         main = [c for c in cells if c[2] in ('01', '22')] or cells
         clat = sum(c[0] for c in main) / len(main)
         clng = sum(c[1] for c in main) / len(main)
         rel = [[round((lat - clat) * 1e5), round((lng - clng) * 1e5)] for lat, lng, _ in cells]
         ncell += len(rel)
-        segs[rd] = {'c': [round(clat, 6), round(clng, 6)], 'a': areas[rd].most_common(1)[0][0], 'n': len(cells), 'p': rel}
+        seg = {'c': [round(clat, 6), round(clng, 6)], 'a': areas[rd].most_common(1)[0][0], 'n': len(cells), 'p': rel}
+        if rnames[rd]:
+            seg['nm'] = rnames[rd].most_common(1)[0][0]
+        if not car:
+            seg['m'] = 1   # 只有機車格
+        segs[rd] = seg
 
     doc = {
         'built': datetime.date.today().isoformat(),
         'source': os.path.basename(src),
-        'note': 'c=路段中心[lat,lng]; a=行政區; n=汽車類格位數(含靠路名掛上的); p=各格位相對中心的位移(1e-5度整數)',
+        'note': 'c=路段中心[lat,lng]; a=行政區; nm=SHP路名(即時檔沒這段時當名稱用); n=汽車類格位數(含靠路名掛上的); m=1 表示只有機車格; p=各格位相對中心的位移(1e-5度整數)',
         'segs': segs,
     }
     with open(out, 'w', encoding='utf-8') as fh:
