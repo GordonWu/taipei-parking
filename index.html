@@ -33,8 +33,9 @@
   --warn-bg:oklch(0.94 0.08 80);
   --full:oklch(0.56 0.2 25);
   --full-bg:oklch(0.93 0.06 25);
-  --mute:oklch(0.6 0.02 250);
-  --mute-bg:oklch(0.92 0.01 250);
+  --mute:oklch(0.55 0.16 250);          /* 無即時資料 = 藍色 */
+  --mute-bg:oklch(0.92 0.05 250);
+  --pin-ok:oklch(0.68 0.21 150);--pin-warn:oklch(0.8 0.18 75);--pin-full:oklch(0.62 0.23 25);--pin-mute:oklch(0.58 0.17 250);
   --shadow:0 1px 2px oklch(0.2 0.03 255 / .08),0 6px 20px oklch(0.2 0.03 255 / .10);
 
   --space-xs:4px;--space-sm:8px;--space-md:12px;--space-lg:16px;--space-xl:24px;--space-2xl:32px;
@@ -58,8 +59,8 @@
     --warn-bg:oklch(0.33 0.06 75);
     --full:oklch(0.72 0.17 25);
     --full-bg:oklch(0.32 0.07 25);
-    --mute:oklch(0.6 0.02 250);
-    --mute-bg:oklch(0.3 0.01 250);
+    --mute:oklch(0.72 0.14 250);
+    --mute-bg:oklch(0.3 0.06 250);
     --shadow:0 1px 2px oklch(0 0 0 / .4),0 8px 24px oklch(0 0 0 / .5);
     color-scheme:dark;
   }
@@ -69,7 +70,7 @@
   --fg:oklch(0.95 0.01 250);--fg-2:oklch(0.7 0.02 250);--line:oklch(0.33 0.02 255);
   --accent:oklch(0.74 0.12 250);--accent-fg:oklch(0.15 0.03 255);
   --ok:oklch(0.76 0.15 150);--ok-bg:oklch(0.3 0.06 150);--warn:oklch(0.8 0.15 75);--warn-bg:oklch(0.33 0.06 75);
-  --full:oklch(0.72 0.17 25);--full-bg:oklch(0.32 0.07 25);--mute:oklch(0.6 0.02 250);--mute-bg:oklch(0.3 0.01 250);
+  --full:oklch(0.72 0.17 25);--full-bg:oklch(0.32 0.07 25);--mute:oklch(0.72 0.14 250);--mute-bg:oklch(0.3 0.06 250);
   --shadow:0 1px 2px oklch(0 0 0 / .4),0 8px 24px oklch(0 0 0 / .5);color-scheme:dark;
 }
 
@@ -181,13 +182,12 @@ button{cursor:pointer;background:none;border:0;padding:0}
   transition:transform .15s;
 }
 .pmark span{transform:rotate(45deg);display:block;padding-top:2px;letter-spacing:-.02em}
-.pmark.ok{background:var(--ok)}.pmark.warn{background:var(--warn)}.pmark.full{background:var(--full)}
-.pmark.mute{background:var(--mute);width:22px;height:22px;font-size:10px;border-width:1.5px}
-.pmark.mute span{padding-top:1px}
+.pmark.ok{background:var(--pin-ok)}.pmark.warn{background:var(--pin-warn)}.pmark.full{background:var(--pin-full)}
+.pmark.mute{background:var(--pin-mute)}
 .pmark.sel{transform:rotate(-45deg) scale(1.3);z-index:9999!important;box-shadow:0 0 0 3px var(--accent),0 2px 8px oklch(0 0 0 / .4)}
 .leaflet-marker-icon.pwrap{background:none;border:0}
-.marker-cluster{background:oklch(0.46 0.15 258 / .25)!important;border-radius:50%}
-.marker-cluster div{width:30px;height:30px;margin:5px;border-radius:50%;text-align:center;line-height:30px;background:var(--accent)!important;color:var(--accent-fg)!important;font-family:var(--font-display);font-weight:800;font-size:13px!important;padding-top:2px;box-sizing:border-box}
+.marker-cluster{background:oklch(0.25 0.02 255 / .22)!important;border-radius:50%}
+.marker-cluster div{width:30px;height:30px;margin:5px;border-radius:50%;text-align:center;line-height:30px;background:var(--fg)!important;color:var(--bg)!important;font-family:var(--font-display);font-weight:800;font-size:13px!important;padding-top:2px;box-sizing:border-box}
 .pmark.w4{font-size:10.5px;letter-spacing:-.04em}
 .dark-tiles .leaflet-tile-pane{filter:invert(1) hue-rotate(185deg) brightness(.85) contrast(.9) saturate(.6)}
 .me{width:18px;height:18px;border-radius:50%;background:oklch(0.55 0.2 255);border:3px solid oklch(1 0 0);box-shadow:0 0 0 2px oklch(0.55 0.2 255 / .4),0 0 12px oklch(0.55 0.2 255 / .6)}
@@ -643,8 +643,8 @@ let meMarker = null;
 
 function iconFor(a, selected){
   const mute = a.cls === 'mute';
-  const label = mute ? 'P' : String(a.n);
-  const size = mute ? 22 : 34;
+  const label = mute ? (a.total ? String(a.total) : 'P') : String(a.n);
+  const size = 34;
   return L.divIcon({ className:'pwrap', iconSize:[size,size], iconAnchor:[size/2, size], popupAnchor:[0,-size],
     html:`<div class="pmark ${a.cls}${selected?' sel':''}${label.length>=4?' w4':''}"><span>${label}</span></div>` });
 }
@@ -864,7 +864,7 @@ $('#modes').addEventListener('click', e => { const b = e.target.closest('[data-m
 
 // 放大到 17 以上時把每一格畫出來(只畫位置;哪一格空對不上,所以顏色跟路段一致)
 const cellLayer = L.layerGroup().addTo(map);
-const CELL_COLOR = { ok:'oklch(0.62 0.17 150)', warn:'oklch(0.72 0.17 70)', full:'oklch(0.56 0.2 25)', mute:'oklch(0.6 0.02 250)' };
+const CELL_COLOR = { ok:'oklch(0.68 0.21 150)', warn:'oklch(0.8 0.18 75)', full:'oklch(0.62 0.23 25)', mute:'oklch(0.58 0.17 250)' };
 function renderCells(){
   cellLayer.clearLayers();
   if (state.mode !== 'street' || map.getZoom() < 17) return;
