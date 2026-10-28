@@ -142,6 +142,17 @@ button{cursor:pointer;background:none;border:0;padding:0}
 .chip.sel select{appearance:none;-webkit-appearance:none;background:transparent;border:0;padding:6px 26px 6px 12px;font-size:13px;font-weight:500;color:inherit;cursor:pointer;max-width:120px}
 .chip.sel::after{content:"";position:absolute;right:11px;top:50%;width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-70%) rotate(45deg);pointer-events:none}
 .chips .sep{flex:none;width:1px;background:var(--line);margin-block:4px}
+.chipgroup{display:contents}
+.chipgroup[hidden]{display:none}
+.modes{display:flex;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--bg)}
+.modes button{flex:1;padding:8px 10px;font-size:14px;font-weight:600;color:var(--fg-2);transition:background .15s,color .15s}
+.modes button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
+.celldot{stroke:oklch(1 0 0 / .85);stroke-width:1}
+.cells{display:flex;flex-wrap:wrap;gap:3px}
+.cells i{width:12px;height:16px;border-radius:2px;background:var(--mute)}
+.cells i.free{background:var(--ok)}.cells i.used{background:var(--full);opacity:.55}.cells i.fault{background:var(--mute);opacity:.5}
+.legend{display:flex;gap:12px;font-size:12px;color:var(--fg-2);flex-wrap:wrap}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:4px}
 
 /* ===== Map ===== */
 #mapwrap{position:relative;min-height:0;height:42vh;height:42dvh}
@@ -301,14 +312,20 @@ button{cursor:pointer;background:none;border:0;padding:0}
   </div>
 
   <div id="filters">
+    <div class="modes" id="modes" role="group" aria-label="查詢類型">
+      <button data-mode="street" aria-pressed="false">路邊停車格</button>
+      <button data-mode="lot" aria-pressed="true">停車場</button>
+    </div>
     <input id="search" type="search" placeholder="搜尋停車場或路名（例：信義、市府）" autocomplete="off" enterkeyhint="search">
     <div class="chips" id="typechips" role="group" aria-label="車種">
+      <span class="chipgroup" id="typegroup">
       <button class="chip" data-type="car" aria-pressed="true">小型車</button>
       <button class="chip" data-type="motor" aria-pressed="false">機車</button>
       <button class="chip" data-type="charge" aria-pressed="false">充電</button>
       <button class="chip" data-type="heavy" aria-pressed="false">大重機</button>
       <button class="chip" data-type="bus" aria-pressed="false">大客車</button>
       <span class="sep"></span>
+      </span>
       <label class="chip sel"><span class="sr">行政區</span>
         <select id="area"><option value="">全市</option></select>
       </label>
@@ -354,8 +371,11 @@ button{cursor:pointer;background:none;border:0;padding:0}
 const SRC = {
   desc:  'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_alldesc.xml',
   avail: 'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_allavailable.xml',
+  street: 'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_roadquery.xml',   // 路邊格位即時檔,約 7.7 MB
+  geo: 'street_geo.json',                                                            // tools/build_street_geo.py 產出
 };
 const LIVE_INTERVAL = 60_000;          // 停管處檔案每分鐘更新一次
+const STREET_INTERVAL = 180_000;       // 路邊檔很大,3 分鐘抓一次
 const STATIC_TTL    = 24 * 3600_000;   // 靜態清單一天重抓一次
 const STORE_KEY     = 'tpk.static.v1';
 const PREF_KEY      = 'tpk.pref.v1';
@@ -378,6 +398,9 @@ const state = {
   live: new Map(),      // id -> {car,motor,bus,hc,preg,heavy,guns:{idle,busy,total}}
   liveTime: null,       // Date of UPDATETIME
   liveFetched: null,    // Date we fetched
+  mode: 'lot',          // 'lot' 停車場 | 'street' 路邊格
+  streets: new Map(),   // rdcode -> item (merged live + geo)
+  streetGeo: null, streetTime: null, streetFetched: null,
   type: 'car', area: '', onlyAvail: true, onlyLive: true, onlyFav: false, sort: 'dist', q: '',
   fav: new Set(),
   me: null,             // [lat,lng]
@@ -392,7 +415,7 @@ const store = {
   const p = store.get(PREF_KEY); if (p) Object.assign(state, p);
   const f = store.get(FAV_KEY);  if (Array.isArray(f)) state.fav = new Set(f);
 })();
-const savePref = () => store.set(PREF_KEY, { type:state.type, area:state.area, onlyAvail:state.onlyAvail, onlyLive:state.onlyLive, onlyFav:state.onlyFav, sort:state.sort });
+const savePref = () => store.set(PREF_KEY, { mode:state.mode, type:state.type, area:state.area, onlyAvail:state.onlyAvail, onlyLive:state.onlyLive, onlyFav:state.onlyFav, sort:state.sort });
 
 // ---------- TWD97 TM2 -> WGS84 ----------
 function tw97ToWgs84(x, y){
@@ -484,6 +507,55 @@ async function loadLive(){
   state.liveFetched = new Date();
 }
 
+// ---------- 路邊停車格 ----------
+// XML 每段:roadSegID / roadSegName / roadSegFee / roadSegtimeStart,End / roadSegTotalValue / roadSegAvail(-99=無資料)
+//          / cellStatusList/cell{psId, cellStatus, data_Dt}。cellStatus 1=有車、2=空位、其他=異常(由 2026-10-28 資料與路段剩餘數比對推得)。
+// 座標來自 street_geo.json(SHP rdcode = roadSegID),格位編號對不上 SHP 的 pknum,所以單格只能畫位置、不標哪一格空。
+const parseStreetTime = s => { const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/.exec(s || ''); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3], +m[4]-8, +m[5], +m[6])) : null; };
+const parseCellTime = s => { const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(s || ''); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3], +m[4]-8, +m[5], +m[6])) : null; };
+const cleanName = s => s.replace(/^[0-9A-Z]{7}\(\d+\)\s*/, '').trim();
+async function loadStreetGeo(){
+  if (state.streetGeo) return state.streetGeo;
+  const r = await fetch(SRC.geo, { cache:'force-cache' });
+  if (!r.ok) throw new Error('格位座標檔 HTTP ' + r.status);
+  state.streetGeo = (await r.json()).segs;
+  return state.streetGeo;
+}
+async function loadStreet(){
+  const [geo, doc] = await Promise.all([loadStreetGeo(), fetchXml(SRC.street)]);
+  const streets = new Map();
+  let latest = null;
+  for (const s of doc.querySelectorAll('ROAD')) {
+    const id = txt(s,'roadSegID'); const g = geo[id];
+    if (!id || !g) continue;
+    const cells = [...s.querySelectorAll('cellStatusList > cell')].map(c => ({ s: txt(c,'cellStatus'), t: parseCellTime(txt(c,'data_Dt')) }));
+    const free = cells.filter(c => c.s === '2').length, used = cells.filter(c => c.s === '1').length;
+    const lastCell = cells.reduce((m, c) => (c.t && (!m || c.t > m)) ? c.t : m, null);
+    const fee = txt(s,'roadSegFee'); const fm = /^(\d+)元$/.exec(fee);
+    const t = parseStreetTime(txt(s,'roadSegUpdatetime')); if (t && (!latest || t > latest)) latest = t;
+    streets.set('S:' + id, {
+      id: 'S:' + id, code: id, kind: 'street', name: cleanName(txt(s,'roadSegName')), area: g.a, lat: g.c[0], lng: g.c[1], geo: g,
+      fee, rate: fm ? +fm[1] : null, start: txt(s,'roadSegtimeStart'), end: txt(s,'roadSegtimeEnd'),
+      carType: txt(s,'roadSegCarType') === '2' ? '機車' : '小型車',
+      tot: num(s,'roadSegTotalValue'), avail: parseInt(txt(s,'roadSegAvail'), 10), usage: parseFloat(txt(s,'roadSegUsage')),
+      cells, free, used, lastCell,
+    });
+  }
+  state.streets = streets;
+  state.streetTime = latest;
+  state.streetFetched = new Date();
+}
+function streetAvailability(st){
+  const total = st.tot || st.geo.n;
+  let n = Number.isFinite(st.avail) && st.avail >= 0 ? st.avail : (st.cells.length ? st.free : null);
+  if (n === null) return { n:null, total, cls:'mute', label:'無感測' };
+  if (n === 0) return { n, total, cls:'full', label:'已滿' };
+  if (n <= 2 || (total > 0 && n / total < 0.1)) return { n, total, cls:'warn', label:'剩不多' };
+  return { n, total, cls:'ok', label:'有車位' };
+}
+const getItem = id => id && id.startsWith('S:') ? state.streets.get(id) : state.byId.get(id);
+const rateText = p => p.kind === 'street' ? (p.rate !== null ? `${p.rate} 元/時` : esc(p.fee)) + ` · ${p.start}–${p.end}` : (p.rate !== null ? `${p.rate} 元/時` : '');
+
 // ---------- Derived ----------
 // returns {n, total, cls, label}  cls: ok|warn|full|mute
 function availability(park, type = state.type){
@@ -509,6 +581,19 @@ function visibleParks(){
   const q = state.q.trim().toLowerCase();
   const ref = refPoint();
   const out = [];
+  if (state.mode === 'street') {
+    for (const st of state.streets.values()) {
+      if (state.area && st.area !== state.area) continue;
+      if (state.onlyFav && !state.fav.has(st.id)) continue;
+      if (q && !st.name.toLowerCase().includes(q)) continue;
+      const a = streetAvailability(st);
+      if (state.onlyLive && a.n === null) continue;
+      if (state.onlyAvail && a.n === 0) continue;
+      out.push({ p: st, a, d: haversine(ref, [st.lat, st.lng]) });
+    }
+    out.sort(state.sort === 'avail' ? (x, y) => ((y.a.n ?? -1) - (x.a.n ?? -1)) || (x.d - y.d) : (x, y) => x.d - y.d);
+    return out;
+  }
   for (const p of state.parks) {
     if (state.area && p.area !== state.area) continue;
     if (state.onlyFav && !state.fav.has(p.id)) continue;
@@ -581,10 +666,10 @@ let lastRows = [];
 function renderList(rows){
   lastRows = rows;
   const list = $('#list');
-  $('#count').textContent = `${rows.length} 個停車場`;
+  $('#count').textContent = state.mode === 'street' ? `${rows.length} 條路段` : `${rows.length} 個停車場`;
   $('#refpt').textContent = (state.follow && state.me) ? '距離你的位置' : '距離地圖中心';
   if (!rows.length) {
-    list.innerHTML = `<li class="empty">這個範圍沒有符合條件的停車場。<br>試試關掉 <b>只看有空位</b>，或換個行政區。</li>`;
+    list.innerHTML = `<li class="empty">這個範圍沒有符合條件的${state.mode === 'street' ? '路段' : '停車場'}。<br>試試關掉 <b>只看有空位</b>，或換個行政區。</li>`;
     return;
   }
   const html = [];
@@ -592,7 +677,7 @@ function renderList(rows){
     const n = a.n === null ? `<span class="n">${a.label}</span>` : `<span class="n">${a.n}<small>/${a.total}</small></span>`;
     html.push(`<li><button class="row" data-id="${p.id}" aria-current="${state.selected===p.id}">
       <div class="t">${state.fav.has(p.id)?'<span class="fav">★</span>':''}<span class="name">${esc(p.name)}</span></div>
-      <div class="meta"><span class="dist">${fmtDist(d)}</span><span>${esc(p.area)}</span>${p.rate!==null?`<span>${p.rate} 元/時</span>`:''}</div>
+      <div class="meta"><span class="dist">${fmtDist(d)}</span><span>${esc(p.area)}</span>${rateText(p)?`<span>${rateText(p)}</span>`:''}</div>
       <div class="av ${a.cls}">${n}<span class="pill ${a.cls}">${a.label}</span></div>
     </button></li>`);
   }
@@ -602,7 +687,51 @@ function renderList(rows){
 
 // ---------- Detail sheet ----------
 const FEAT = { Taxi_OneHR_Free:'計程車 1 小時免費', AED_Equipment:'AED', CellSignal_Enhancement:'手機訊號增強', Accessibility_Elevator:'無障礙電梯', Phone_Charge:'手機充電', Child_Pickup_Area:'兒童接送區' };
+const hhmm = t => t ? t.toLocaleTimeString('zh-TW', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Taipei' }) : '—';
+function renderStreetSheet(id){
+  const st = state.streets.get(id); if (!st) return;
+  const a = streetAvailability(st);
+  const gmaps = `https://www.google.com/maps/dir/?api=1&destination=${st.lat},${st.lng}&travelmode=driving`;
+  const amaps = `https://maps.apple.com/?daddr=${st.lat},${st.lng}&dirflg=d`;
+  const fault = st.cells.length - st.free - st.used;
+  const strip = st.cells.length ? `
+    <div>
+      <div class="gunsum" style="margin:0 0 6px">感測格位 ${st.cells.length} 格：空 ${st.free}、有車 ${st.used}${fault ? `、異常 ${fault}` : ''}${st.cells.length < (st.tot||0) ? `（另 ${st.tot - st.cells.length} 格無感測）` : ''}</div>
+      <div class="cells">${st.cells.map(c => `<i class="${c.s === '2' ? 'free' : c.s === '1' ? 'used' : 'fault'}"></i>`).join('')}</div>
+      <div class="legend" style="margin-top:6px"><span><i style="background:var(--ok)"></i>空位</span><span><i style="background:var(--full);opacity:.55"></i>有車</span><span><i style="background:var(--mute);opacity:.5"></i>異常</span></div>
+      <div class="gunsum">最後一筆感測 ${hhmm(st.lastCell)}。格位順序是感測器編號，不是路上的先後。</div>
+    </div>` : `<div class="gunsum">這條路段沒有感測器，只有總格數。</div>`;
+  $('#sheetbody').innerHTML = `
+    <header>
+      <div><h2>${esc(st.name)}</h2><div class="addr"><span class="area">${esc(st.area)}</span>路邊停車格 · ${st.carType}</div></div>
+      <button class="closebtn" id="closesheet" aria-label="關閉">✕</button>
+    </header>
+    <div class="slots">
+      <div class="slot ${a.cls}"><div class="k">剩餘</div>${a.n === null ? `<span class="v">${a.label}</span>` : `<span class="v">${a.n}<small> / ${a.total}</small></span>`}</div>
+      <div class="slot"><div class="k">收費</div><span class="v" style="font-size:18px">${esc(st.fee)}</span></div>
+      <div class="slot"><div class="k">收費時段</div><span class="v" style="font-size:18px">${esc(st.start)}–${esc(st.end)}</span></div>
+    </div>
+    ${strip}
+    <div class="actions">
+      <a class="btn primary" href="${gmaps}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8z"/></svg>Google 導航</a>
+      <a class="btn" href="${amaps}" target="_blank" rel="noopener">Apple 地圖</a>
+      <button class="btn star" id="favbtn" aria-pressed="${state.fav.has(st.id)}">${state.fav.has(st.id)?'★ 已收藏':'☆ 收藏'}</button>
+    </div>
+    <dl class="kv">
+      <dt>使用率</dt><dd>${Number.isFinite(st.usage) && st.usage >= 0 ? Math.round(st.usage*100) + '%' : '—'}</dd>
+      <dt>路段代碼</dt><dd>${esc(st.code)}</dd>
+      <dt>資料時間</dt><dd>${hhmm(state.streetTime)}（停管處路邊檔）</dd>
+    </dl>
+  `;
+  $('#closesheet').onclick = () => select(null);
+  $('#favbtn').onclick = () => {
+    if (state.fav.has(st.id)) state.fav.delete(st.id); else state.fav.add(st.id);
+    store.set(FAV_KEY, [...state.fav]); renderStreetSheet(id); refresh();
+  };
+  const sh = $('#sheet'); sh.classList.add('open'); sh.setAttribute('aria-hidden', 'false');
+}
 function renderSheet(id){
+  if (id.startsWith('S:')) return renderStreetSheet(id);
   const p = state.byId.get(id); if (!p) return;
   const lv = state.live.get(id);
   const slot = (type, label) => {
@@ -654,8 +783,8 @@ function select(id, { pan=true } = {}){
   const prev = state.selected;
   state.selected = id;
   if (id) {
-    const p = state.byId.get(id);
-    if (p && pan) map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), 16), { duration:.5 });
+    const p = getItem(id);
+    if (p && pan) map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), id.startsWith('S:') ? 17 : 16), { duration:.5 });
     renderSheet(id);
   } else {
     const sh = $('#sheet'); sh.classList.remove('open'); sh.setAttribute('aria-hidden', 'true');
@@ -667,32 +796,73 @@ function select(id, { pan=true } = {}){
 // ---------- Status line ----------
 function renderStatus(){
   const el = $('#status');
-  if (!state.liveFetched) { el.textContent = '尚未取得即時資料'; return; }
-  const t = state.liveTime;
+  const street = state.mode === 'street';
+  if (street ? !state.streetFetched : !state.liveFetched) { el.textContent = street ? '載入路邊格位資料中…' : '尚未取得即時資料'; return; }
+  const t = street ? state.streetTime : state.liveTime;
   const hhmm = t ? t.toLocaleTimeString('zh-TW', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Taipei' }) : '—';
-  const age = t ? Math.round((Date.now() - t.getTime()) / 60000) : null;
+  const age = t ? Math.max(0, Math.round((Date.now() - t.getTime()) / 60000)) : null;
   const stale = age !== null && age >= 10;
   el.classList.toggle('stale', stale);
-  el.innerHTML = `停管處資料時間 <b>${hhmm}</b>${age !== null ? `（${age < 1 ? '不到 1 分鐘前' : age + ' 分鐘前'}）` : ''}${stale ? ' ⚠ 來源久未更新' : ''}`;
+  el.innerHTML = `${street ? '路邊格位' : '停車場'}資料時間 <b>${hhmm}</b>${age !== null ? `（${age < 1 ? '不到 1 分鐘前' : age + ' 分鐘前'}）` : ''}${stale ? ' ⚠ 來源久未更新' : ''}`;
 }
 
 // ---------- Refresh orchestration ----------
 let liveTimer = null, refreshing = false;
-function refresh(){ const rows = visibleParks(); renderMarkers(rows); renderList(rows); renderStatus(); }
+function refresh(){ const rows = visibleParks(); renderMarkers(rows); renderList(rows); renderStatus(); renderCells(); }
 async function pullLive(manual=false){
   if (refreshing) return; refreshing = true;
   $('#refresh').classList.add('spin');
-  try { await loadLive(); refresh(); if (manual) toast('已更新'); }
-  catch (e) { console.error(e); toast('即時資料抓不到，稍後再試：' + e.message); renderStatus(); }
+  const street = state.mode === 'street';
+  try {
+    if (street) { const first = !state.streetFetched; await loadStreet(); if (first) toast('路邊格位即時檔約 7.7 MB，每 3 分鐘自動更新。用行動網路請留意流量。'); }
+    else await loadLive();
+    refresh(); if (manual) toast('已更新');
+  }
+  catch (e) { console.error(e); toast((street ? '路邊格位資料' : '即時資料') + '抓不到，稍後再試：' + e.message); renderStatus(); }
   finally { refreshing = false; $('#refresh').classList.remove('spin'); }
 }
 function schedule(){
   clearInterval(liveTimer);
-  liveTimer = setInterval(() => { if (document.visibilityState === 'visible') pullLive(); }, LIVE_INTERVAL);
+  liveTimer = setInterval(() => { if (document.visibilityState === 'visible') pullLive(); }, state.mode === 'street' ? STREET_INTERVAL : LIVE_INTERVAL);
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && state.liveFetched && Date.now() - state.liveFetched > 30_000) pullLive();
+  const last = state.mode === 'street' ? state.streetFetched : state.liveFetched;
+  const gap = state.mode === 'street' ? STREET_INTERVAL / 2 : 30_000;
+  if (document.visibilityState === 'visible' && last && Date.now() - last > gap) pullLive();
 });
+
+// 模式切換:停車場 <-> 路邊格
+function setMode(mode){
+  if (state.mode === mode) return;
+  state.mode = mode; savePref();
+  for (const b of $('#modes').querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', b.dataset.mode === mode);
+  $('#typegroup').hidden = mode === 'street';
+  $('#search').placeholder = mode === 'street' ? '搜尋路名（例：忠孝東路、市民大道）' : '搜尋停車場或路名（例：信義、市府）';
+  select(null);
+  cluster.clearLayers(); markers.clear(); cellLayer.clearLayers();
+  schedule();
+  if (mode === 'street' && !state.streetFetched) { renderStatus(); $('#list').innerHTML = '<li class="empty">載入路邊格位資料中…</li>'; pullLive(); }
+  else refresh();
+}
+$('#modes').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
+
+// 放大到 17 以上時把每一格畫出來(只畫位置;哪一格空對不上,所以顏色跟路段一致)
+const cellLayer = L.layerGroup().addTo(map);
+const CELL_COLOR = { ok:'oklch(0.62 0.17 150)', warn:'oklch(0.72 0.17 70)', full:'oklch(0.56 0.2 25)', mute:'oklch(0.6 0.02 250)' };
+function renderCells(){
+  cellLayer.clearLayers();
+  if (state.mode !== 'street' || map.getZoom() < 17) return;
+  const b = map.getBounds().pad(0.2);
+  let n = 0;
+  for (const { p, a } of lastRows) {
+    if (!b.contains([p.lat, p.lng])) continue;
+    for (const [dy, dx] of p.geo.p) {
+      cellLayer.addLayer(L.circleMarker([p.lat + dy / 1e5, p.lng + dx / 1e5], { radius:3.5, color:'white', weight:1, fillColor:CELL_COLOR[a.cls], fillOpacity:.9, interactive:false }));
+      if (++n > 1500) return;
+    }
+  }
+}
+map.on('zoomend', renderCells);
 setInterval(renderStatus, 15_000);
 
 // ---------- UI wiring ----------
@@ -758,10 +928,12 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.sele
   for (const a of areas) { const o = document.createElement('option'); o.value = a; o.textContent = a; sel.appendChild(o); }
   sel.value = state.area || '';
   $('#bootmsg').textContent = '取得即時車位…';
+  const wantStreet = state.mode === 'street'; state.mode = 'lot';
   await pullLive();
   $('#boot').hidden = true;
   schedule();
   setTimeout(() => map.invalidateSize(), 50);
+  if (wantStreet) setMode('street');
 })();
 })();
 </script>
