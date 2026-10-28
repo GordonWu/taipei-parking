@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>台北找車位</title>
+<meta name="description" content="用台北市政府開放資料，即時查剩餘車位、費率與導航。">
+<meta name="theme-color" content="#1d4f91">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%231d4f91'/%3E%3Ctext x='32' y='46' font-family='Arial Black,Arial' font-weight='900' font-size='40' text-anchor='middle' fill='white'%3EP%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" crossorigin="">
+<style>
+/* Layout: road-sign aesthetic. Phone = stacked map-over-list; desktop = list rail left, map fills right.
+   Numbers are the product: the available-count is set in Overpass (Highway Gothic lineage) and is always the biggest thing in a row. */
+:root{
+  --font-display:"Overpass","Noto Sans TC",system-ui,sans-serif;
+  --font-body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+
+  --bg:oklch(0.975 0.006 250);
+  --surface:oklch(0.995 0.003 250);
+  --surface-2:oklch(0.95 0.01 250);
+  --fg:oklch(0.22 0.03 255);
+  --fg-2:oklch(0.48 0.03 255);
+  --line:oklch(0.86 0.015 250);
+  --accent:oklch(0.46 0.15 258);        /* parking-sign blue */
+  --accent-fg:oklch(0.99 0.005 250);
+  --ok:oklch(0.62 0.17 150);
+  --ok-bg:oklch(0.93 0.07 150);
+  --warn:oklch(0.72 0.17 70);
+  --warn-bg:oklch(0.94 0.08 80);
+  --full:oklch(0.56 0.2 25);
+  --full-bg:oklch(0.93 0.06 25);
+  --mute:oklch(0.6 0.02 250);
+  --mute-bg:oklch(0.92 0.01 250);
+  --shadow:0 1px 2px oklch(0.2 0.03 255 / .08),0 6px 20px oklch(0.2 0.03 255 / .10);
+
+  --space-xs:4px;--space-sm:8px;--space-md:12px;--space-lg:16px;--space-xl:24px;--space-2xl:32px;
+  --radius:6px;
+  --rail:400px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:oklch(0.17 0.015 255);
+    --surface:oklch(0.22 0.018 255);
+    --surface-2:oklch(0.27 0.02 255);
+    --fg:oklch(0.95 0.01 250);
+    --fg-2:oklch(0.7 0.02 250);
+    --line:oklch(0.33 0.02 255);
+    --accent:oklch(0.74 0.12 250);
+    --accent-fg:oklch(0.15 0.03 255);
+    --ok:oklch(0.76 0.15 150);
+    --ok-bg:oklch(0.3 0.06 150);
+    --warn:oklch(0.8 0.15 75);
+    --warn-bg:oklch(0.33 0.06 75);
+    --full:oklch(0.72 0.17 25);
+    --full-bg:oklch(0.32 0.07 25);
+    --mute:oklch(0.6 0.02 250);
+    --mute-bg:oklch(0.3 0.01 250);
+    --shadow:0 1px 2px oklch(0 0 0 / .4),0 8px 24px oklch(0 0 0 / .5);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:oklch(0.17 0.015 255);--surface:oklch(0.22 0.018 255);--surface-2:oklch(0.27 0.02 255);
+  --fg:oklch(0.95 0.01 250);--fg-2:oklch(0.7 0.02 250);--line:oklch(0.33 0.02 255);
+  --accent:oklch(0.74 0.12 250);--accent-fg:oklch(0.15 0.03 255);
+  --ok:oklch(0.76 0.15 150);--ok-bg:oklch(0.3 0.06 150);--warn:oklch(0.8 0.15 75);--warn-bg:oklch(0.33 0.06 75);
+  --full:oklch(0.72 0.17 25);--full-bg:oklch(0.32 0.07 25);--mute:oklch(0.6 0.02 250);--mute-bg:oklch(0.3 0.01 250);
+  --shadow:0 1px 2px oklch(0 0 0 / .4),0 8px 24px oklch(0 0 0 / .5);color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15px;line-height:1.45;overflow:hidden;-webkit-text-size-adjust:100%}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num{font-family:var(--font-display);font-variant-numeric:tabular-nums;font-weight:800}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* ===== App frame ===== */
+#app{height:100%;display:grid;grid-template-rows:auto auto 1fr;grid-template-columns:100%}
+@media (min-width:900px){
+  #app{grid-template-columns:var(--rail) 1fr;grid-template-rows:auto auto 1fr}
+  #topbar{grid-column:1/-1}
+  #filters{grid-column:1;grid-row:2}
+  #rail{grid-column:1;grid-row:3}
+  #mapwrap{grid-column:2;grid-row:2/4}
+}
+
+/* ===== Top bar ===== */
+#topbar{
+  display:flex;align-items:center;gap:var(--space-md);
+  padding-block:var(--space-sm);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-top:calc(var(--space-sm) + env(safe-area-inset-top,0px));
+  background:var(--accent);color:var(--accent-fg);
+}
+#topbar .mark{
+  width:34px;height:34px;border-radius:5px;background:var(--accent-fg);color:var(--accent);
+  display:grid;place-items:center;font-family:var(--font-display);font-weight:800;font-size:24px;line-height:1;flex:none;padding-top:3px;
+}
+#topbar h1{margin:0;font-size:17px;font-weight:700;letter-spacing:.02em;line-height:1.1}
+#topbar .sub{font-size:12px;opacity:.85;margin-top:2px;font-variant-numeric:tabular-nums}
+#topbar .sub b{font-weight:600}
+#topbar .sub.stale{color:oklch(0.92 0.12 85)}
+#topbar .grow{flex:1;min-width:0}
+.iconbtn{
+  width:40px;height:40px;border-radius:var(--radius);display:grid;place-items:center;flex:none;
+  color:inherit;background:oklch(1 0 0 / .14);transition:background .15s;
+}
+.iconbtn:hover{background:oklch(1 0 0 / .24)}
+.iconbtn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.iconbtn.spin svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ===== Filters ===== */
+#filters{
+  display:flex;flex-direction:column;gap:var(--space-sm);
+  padding-block:var(--space-sm);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  background:var(--surface);border-bottom:1px solid var(--line);
+}
+#search{
+  width:100%;border:1px solid var(--line);background:var(--bg);border-radius:var(--radius);
+  padding:9px 12px;font-size:15px;min-width:0;
+}
+#search::placeholder{color:var(--mute)}
+.chips{display:flex;gap:var(--space-sm);overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;margin-inline:-2px;padding-inline:2px}
+.chips::-webkit-scrollbar{display:none}
+.chip{
+  flex:none;border:1px solid var(--line);background:var(--surface);border-radius:999px;
+  padding:6px 12px;font-size:13px;font-weight:500;white-space:nowrap;color:var(--fg-2);
+  transition:background .15s,color .15s,border-color .15s;
+}
+.chip[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.chip.sel{padding:0;position:relative}
+.chip.sel select{appearance:none;-webkit-appearance:none;background:transparent;border:0;padding:6px 26px 6px 12px;font-size:13px;font-weight:500;color:inherit;cursor:pointer;max-width:120px}
+.chip.sel::after{content:"";position:absolute;right:11px;top:50%;width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-70%) rotate(45deg);pointer-events:none}
+.chips .sep{flex:none;width:1px;background:var(--line);margin-block:4px}
+
+/* ===== Map ===== */
+#mapwrap{position:relative;min-height:0;height:42vh;height:42dvh}
+@media (min-width:900px){#mapwrap{height:auto}}
+#map{position:absolute;inset:0;background:var(--surface-2)}
+.leaflet-container{font:inherit}
+.leaflet-control-attribution{font-size:10px;background:oklch(1 0 0 / .7)}
+:root[data-theme="dark"] .leaflet-control-attribution{background:oklch(0.2 0.01 255 / .7);color:var(--fg-2)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .leaflet-control-attribution{background:oklch(0.2 0.01 255 / .7);color:var(--fg-2)}}
+.leaflet-control-zoom a{background:var(--surface);color:var(--fg);border-color:var(--line)!important}
+.leaflet-bar{border:1px solid var(--line)!important;box-shadow:var(--shadow)!important}
+.leaflet-control-zoom a:hover{background:var(--surface-2)}
+#locate{
+  position:absolute;right:calc(10px + env(safe-area-inset-right,0px));bottom:10px;z-index:800;
+  width:44px;height:44px;border-radius:var(--radius);background:var(--surface);color:var(--fg);
+  box-shadow:var(--shadow);display:grid;place-items:center;border:1px solid var(--line);
+}
+#locate svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+#locate[data-on="true"]{color:var(--accent);border-color:var(--accent)}
+#locate.busy svg{animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.pmark{
+  width:34px;height:34px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);
+  display:grid;place-items:center;border:2px solid oklch(1 0 0 / .9);box-shadow:0 2px 6px oklch(0 0 0 / .35);
+  font-family:var(--font-display);font-weight:800;font-size:13px;color:oklch(0.99 0 0);
+  transition:transform .15s;
+}
+.pmark span{transform:rotate(45deg);display:block;padding-top:2px;letter-spacing:-.02em}
+.pmark.ok{background:var(--ok)}.pmark.warn{background:var(--warn)}.pmark.full{background:var(--full)}
+.pmark.mute{background:var(--mute);width:22px;height:22px;font-size:10px;border-width:1.5px}
+.pmark.mute span{padding-top:1px}
+.pmark.sel{transform:rotate(-45deg) scale(1.3);z-index:9999!important;box-shadow:0 0 0 3px var(--accent),0 2px 8px oklch(0 0 0 / .4)}
+.leaflet-marker-icon.pwrap{background:none;border:0}
+.marker-cluster{background:oklch(0.46 0.15 258 / .25)!important;border-radius:50%}
+.marker-cluster div{width:30px;height:30px;margin:5px;border-radius:50%;text-align:center;line-height:30px;background:var(--accent)!important;color:var(--accent-fg)!important;font-family:var(--font-display);font-weight:800;font-size:13px!important;padding-top:2px;box-sizing:border-box}
+.pmark.w4{font-size:10.5px;letter-spacing:-.04em}
+.dark-tiles .leaflet-tile-pane{filter:invert(1) hue-rotate(185deg) brightness(.85) contrast(.9) saturate(.6)}
+.me{width:18px;height:18px;border-radius:50%;background:oklch(0.55 0.2 255);border:3px solid oklch(1 0 0);box-shadow:0 0 0 2px oklch(0.55 0.2 255 / .4),0 0 12px oklch(0.55 0.2 255 / .6)}
+.leaflet-marker-icon.mewrap{background:none;border:0}
+
+/* ===== List rail ===== */
+#rail{min-height:0;display:flex;flex-direction:column;background:var(--surface)}
+#railhead{
+  display:flex;align-items:baseline;gap:var(--space-sm);font-size:12px;color:var(--fg-2);
+  padding-block:var(--space-sm);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  border-bottom:1px solid var(--line);
+}
+#railhead .count{font-variant-numeric:tabular-nums}
+#railhead .grow{flex:1}
+.sortbtn{font-size:12px;color:var(--fg-2);padding:2px 6px;border-radius:4px}
+.sortbtn[aria-pressed="true"]{color:var(--fg);font-weight:700;background:var(--surface-2)}
+#list{flex:1;overflow-y:auto;overscroll-behavior:contain;margin:0;padding:0 0 calc(var(--space-xl) + env(safe-area-inset-bottom,0px));list-style:none}
+.row{
+  display:grid;grid-template-columns:1fr auto;gap:2px var(--space-md);align-items:center;
+  padding-block:var(--space-md);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  border-bottom:1px solid var(--line);cursor:pointer;width:100%;text-align:left;
+  transition:background .12s;
+}
+.row:hover{background:var(--surface-2)}
+.row[aria-current="true"]{background:color-mix(in oklch,var(--accent) 10%,var(--surface))}
+.row .t{display:flex;align-items:center;gap:6px;min-width:0}
+.row .name{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.row .fav{color:var(--warn);flex:none;font-size:13px;line-height:1}
+.row .meta{color:var(--fg-2);font-size:12.5px;display:flex;gap:8px;flex-wrap:wrap;min-width:0}
+.row .meta .dist{font-variant-numeric:tabular-nums;color:var(--fg);font-weight:500}
+.row .meta .dist::after{content:"·";margin-left:8px;color:var(--line)}
+.row .av{grid-row:1/3;grid-column:2;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:2px;min-width:72px}
+.row .av .n{font-size:28px;line-height:1;letter-spacing:-.02em}
+.row .av .n small{font-size:13px;font-weight:600;color:var(--fg-2);letter-spacing:0}
+.row .av.ok .n{color:var(--ok)}.row .av.warn .n{color:var(--warn)}.row .av.full .n{color:var(--full)}.row .av.mute .n{color:var(--mute);font-size:14px;font-weight:600}
+.pill{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;letter-spacing:.04em}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.pill.full{background:var(--full-bg);color:var(--full)}.pill.mute{background:var(--mute-bg);color:var(--mute)}
+.empty{padding:var(--space-2xl) var(--space-lg);color:var(--fg-2);text-align:center;font-size:14px;line-height:1.7}
+.empty b{color:var(--fg)}
+
+/* ===== Detail sheet ===== */
+#sheet{
+  position:fixed;inset:auto 0 0 0;z-index:1000;max-height:min(84vh,84dvh);display:flex;flex-direction:column;
+  background:var(--surface);border-radius:14px 14px 0 0;box-shadow:0 -4px 30px oklch(0 0 0 / .25);
+  transform:translateY(105%);transition:transform .28s cubic-bezier(.22,1,.36,1);
+}
+#sheet.open{transform:none}
+@media (min-width:900px){
+  #sheet{inset:auto auto 0 0;width:var(--rail);border-radius:14px 14px 0 0;max-height:80vh}
+}
+@media (prefers-reduced-motion:reduce){#sheet{transition:none}.pmark{transition:none}}
+#sheet .grip{width:40px;height:4px;border-radius:2px;background:var(--line);margin:8px auto 0;flex:none}
+#sheet .body{overflow-y:auto;padding-block:var(--space-md) calc(var(--space-xl) + env(safe-area-inset-bottom,0px));padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:var(--space-lg)}
+#sheet header{display:grid;grid-template-columns:1fr auto;gap:var(--space-sm) var(--space-md);align-items:start}
+#sheet h2{margin:0;font-size:20px;font-weight:700;line-height:1.25;text-wrap:balance}
+#sheet .addr{color:var(--fg-2);font-size:13.5px;margin-top:4px}
+#sheet .addr .area{color:var(--fg);font-weight:600;margin-right:6px}
+#sheet .closebtn{width:36px;height:36px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-size:18px;color:var(--fg-2)}
+.slots{display:flex;gap:var(--space-sm);flex-wrap:wrap}
+.slot{flex:1 1 90px;border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;min-width:0}
+.slot .k{font-size:11.5px;color:var(--fg-2);letter-spacing:.04em}
+.slot .v{font-size:24px;line-height:1.05;margin-top:2px;white-space:nowrap;display:block}
+.slot .v small{font-size:12px;color:var(--fg-2);font-weight:600}
+.slot.ok .v{color:var(--ok)}.slot.warn .v{color:var(--warn)}.slot.full .v{color:var(--full)}.slot.mute .v{color:var(--mute);font-size:16px}
+.actions{display:flex;gap:var(--space-sm);flex-wrap:wrap}
+.btn{
+  flex:1 1 120px;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  padding:11px 14px;border-radius:var(--radius);font-weight:700;font-size:14.5px;text-decoration:none;white-space:nowrap;
+  background:var(--surface-2);color:var(--fg);border:1px solid var(--line);
+}
+.btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.btn.star[aria-pressed="true"]{color:var(--warn);border-color:var(--warn)}
+.btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px var(--space-md);font-size:14px}
+.kv dt{color:var(--fg-2);white-space:nowrap}
+.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.kv dd a{color:var(--accent)}
+.feats{display:flex;flex-wrap:wrap;gap:6px}
+.feats span{font-size:12px;padding:3px 8px;border-radius:4px;background:var(--surface-2);color:var(--fg-2)}
+.guns{display:flex;flex-wrap:wrap;gap:4px}
+.gun{width:14px;height:14px;border-radius:3px;background:var(--mute)}
+.gun.idle{background:var(--ok)}.gun.busy{background:var(--warn)}
+.gunsum{font-size:13px;color:var(--fg-2);margin-top:4px}
+
+/* ===== Toast / loading ===== */
+#toast{
+  position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);z-index:2000;
+  background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:var(--radius);font-size:13.5px;
+  opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;max-width:calc(100vw - 32px);text-align:center;
+}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#boot{position:fixed;inset:0;z-index:3000;background:var(--bg);display:grid;place-items:center;text-align:center;padding:24px}
+#boot[hidden]{display:none}
+#boot .mark{width:64px;height:64px;border-radius:10px;background:var(--accent);color:var(--accent-fg);display:grid;place-items:center;font-family:var(--font-display);font-weight:800;font-size:44px;margin:0 auto 16px;padding-top:4px}
+#boot p{margin:6px 0;color:var(--fg-2);font-size:14px}
+#boot .bar{width:200px;height:4px;background:var(--line);border-radius:2px;margin:14px auto 0;overflow:hidden}
+#boot .bar i{display:block;height:100%;width:30%;background:var(--accent);animation:slide 1.2s ease-in-out infinite}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}
+</style>
+</head>
+<body>
+<div id="boot">
+  <div>
+    <div class="mark">P</div>
+    <p id="bootmsg">載入停車場資料…</p>
+    <div class="bar"><i></i></div>
+  </div>
+</div>
+
+<div id="app">
+  <div id="topbar">
+    <div class="mark" aria-hidden="true">P</div>
+    <div class="grow">
+      <h1>台北找車位</h1>
+      <div class="sub" id="status">連線中…</div>
+    </div>
+    <button class="iconbtn" id="refresh" title="立即更新" aria-label="立即更新">
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+    </button>
+  </div>
+
+  <div id="filters">
+    <input id="search" type="search" placeholder="搜尋停車場或路名（例：信義、市府）" autocomplete="off" enterkeyhint="search">
+    <div class="chips" id="typechips" role="group" aria-label="車種">
+      <button class="chip" data-type="car" aria-pressed="true">小型車</button>
+      <button class="chip" data-type="motor" aria-pressed="false">機車</button>
+      <button class="chip" data-type="charge" aria-pressed="false">充電</button>
+      <button class="chip" data-type="heavy" aria-pressed="false">大重機</button>
+      <button class="chip" data-type="bus" aria-pressed="false">大客車</button>
+      <span class="sep"></span>
+      <label class="chip sel"><span class="sr">行政區</span>
+        <select id="area"><option value="">全市</option></select>
+      </label>
+      <button class="chip" id="onlyavail" aria-pressed="true">只看有空位</button>
+      <button class="chip" id="onlylive" aria-pressed="true">只看有即時資料</button>
+      <button class="chip" id="onlyfav" aria-pressed="false">★ 收藏</button>
+    </div>
+  </div>
+
+  <div id="mapwrap">
+    <div id="map"></div>
+    <button id="locate" data-on="false" title="定位到我" aria-label="定位到我">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    </button>
+  </div>
+
+  <div id="rail">
+    <div id="railhead">
+      <span class="count" id="count">—</span>
+      <span id="refpt"></span>
+      <span class="grow"></span>
+      <span>排序</span>
+      <button class="sortbtn" data-sort="dist" aria-pressed="true">距離</button>
+      <button class="sortbtn" data-sort="avail" aria-pressed="false">空位</button>
+    </div>
+    <ul id="list"></ul>
+  </div>
+</div>
+
+<section id="sheet" aria-label="停車場詳細資料" aria-hidden="true">
+  <div class="grip"></div>
+  <div class="body" id="sheetbody"></div>
+</section>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" crossorigin=""></script>
+<script>
+(() => {
+'use strict';
+// ---------- Config ----------
+const SRC = {
+  desc:  'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_alldesc.xml',
+  avail: 'https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_allavailable.xml',
+};
+const LIVE_INTERVAL = 60_000;          // 停管處檔案每分鐘更新一次
+const STATIC_TTL    = 24 * 3600_000;   // 靜態清單一天重抓一次
+const STORE_KEY     = 'tpk.static.v1';
+const PREF_KEY      = 'tpk.pref.v1';
+const FAV_KEY       = 'tpk.fav.v1';
+const TAIPEI        = [25.0375, 121.5637];
+
+const TYPES = {
+  car:   { label:'小型車', avail:'AVAILABLECAR',        total:'TOTALCAR' },
+  motor: { label:'機車',   avail:'AVAILABLEMOTOR',      total:'TOTALMOTOR' },
+  bus:   { label:'大客車', avail:'AVAILABLEBUS',        total:'TOTALBUS' },
+  heavy: { label:'大重機', avail:'AVAILABLEHEAVYMOTOR', total:'TOTALLARGEMOTOR' },
+  charge:{ label:'充電',   avail:null,                  total:'ChargingStation' },
+};
+
+// ---------- State ----------
+const $ = (s, el=document) => el.querySelector(s);
+const state = {
+  parks: [],            // static records
+  byId: new Map(),
+  live: new Map(),      // id -> {car,motor,bus,hc,preg,heavy,guns:{idle,busy,total}}
+  liveTime: null,       // Date of UPDATETIME
+  liveFetched: null,    // Date we fetched
+  type: 'car', area: '', onlyAvail: true, onlyLive: true, onlyFav: false, sort: 'dist', q: '',
+  fav: new Set(),
+  me: null,             // [lat,lng]
+  follow: false,
+  selected: null,
+};
+const store = {
+  get(k){ try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
+};
+(() => {
+  const p = store.get(PREF_KEY); if (p) Object.assign(state, p);
+  const f = store.get(FAV_KEY);  if (Array.isArray(f)) state.fav = new Set(f);
+})();
+const savePref = () => store.set(PREF_KEY, { type:state.type, area:state.area, onlyAvail:state.onlyAvail, onlyLive:state.onlyLive, onlyFav:state.onlyFav, sort:state.sort });
+
+// ---------- TWD97 TM2 -> WGS84 ----------
+function tw97ToWgs84(x, y){
+  const a=6378137, f=1/298.257222101, k0=0.9999, dx=250000, lon0=121*Math.PI/180;
+  const b=a*(1-f), e2=(a*a-b*b)/(a*a), e2p=(a*a-b*b)/(b*b);
+  x -= dx;
+  const M=y/k0, mu=M/(a*(1-e2/4-3*e2*e2/64-5*e2*e2*e2/256));
+  const e1=(1-Math.sqrt(1-e2))/(1+Math.sqrt(1-e2));
+  const J1=3*e1/2-27*e1**3/32, J2=21*e1*e1/16-55*e1**4/32, J3=151*e1**3/96, J4=1097*e1**4/512;
+  const fp=mu+J1*Math.sin(2*mu)+J2*Math.sin(4*mu)+J3*Math.sin(6*mu)+J4*Math.sin(8*mu);
+  const C1=e2p*Math.cos(fp)**2, T1=Math.tan(fp)**2;
+  const R1=a*(1-e2)/Math.pow(1-e2*Math.sin(fp)**2,1.5), N1=a/Math.sqrt(1-e2*Math.sin(fp)**2), D=x/(N1*k0);
+  const Q1=N1*Math.tan(fp)/R1, Q2=D*D/2, Q3=(5+3*T1+10*C1-4*C1*C1-9*e2p)*D**4/24, Q4=(61+90*T1+298*C1+45*T1*T1-3*C1*C1-252*e2p)*D**6/720;
+  const lat=fp-Q1*(Q2-Q3+Q4);
+  const Q5=D, Q6=(1+2*T1+C1)*D**3/6, Q7=(5-2*C1+28*T1-3*C1*C1+8*e2p+24*T1*T1)*D**5/120;
+  const lon=lon0+(Q5-Q6+Q7)/Math.cos(fp);
+  return [lat*180/Math.PI, lon*180/Math.PI];
+}
+function haversine(a, b){
+  const R=6371000, toR=Math.PI/180;
+  const dLat=(b[0]-a[0])*toR, dLng=(b[1]-a[1])*toR;
+  const s=Math.sin(dLat/2)**2+Math.cos(a[0]*toR)*Math.cos(b[0]*toR)*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
+
+// ---------- Fetch & parse ----------
+async function fetchXml(url){
+  const r = await fetch(url + '?_=' + Date.now(), { cache:'no-store' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const txt = await r.text();
+  const doc = new DOMParser().parseFromString(txt, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('XML 解析失敗');
+  return doc;
+}
+const txt = (el, tag) => { const n = el.querySelector(tag); return n ? n.textContent.trim() : ''; };
+const num = (el, tag) => { const v = parseInt(txt(el, tag), 10); return Number.isFinite(v) ? v : 0; };
+function parseFeedTime(s){ // "Tue Oct 27 22:45:00 CST 2026"
+  const m = /^\w{3} (\w{3}) (\d{1,2}) (\d{2}):(\d{2}):(\d{2}) \w+ (\d{4})$/.exec(s.trim());
+  if (!m) return null;
+  const mon = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11}[m[1]];
+  return new Date(Date.UTC(+m[6], mon, +m[2], +m[3]-8, +m[4], +m[5]));
+}
+
+async function loadStatic(force=false){
+  const cached = store.get(STORE_KEY);
+  if (!force && cached && Date.now() - cached.ts < STATIC_TTL && Array.isArray(cached.parks) && cached.parks.length) {
+    return cached.parks;
+  }
+  $('#bootmsg').textContent = cached ? '更新停車場清單…' : '第一次使用，下載停車場清單（約 4 MB）…';
+  const doc = await fetchXml(SRC.desc);
+  const parks = [...doc.querySelectorAll('PARK')].map(p => {
+    const x = parseFloat(txt(p,'TW97X')), y = parseFloat(txt(p,'TW97Y'));
+    const [lat, lng] = (x > 0 && y > 0) ? tw97ToWgs84(x, y) : [NaN, NaN];
+    const o = {
+      id: txt(p,'ID'), name: txt(p,'NAME'), area: txt(p,'AREA'), kind: txt(p,'TYPE2'), live: txt(p,'TYPE') === '1',
+      addr: txt(p,'ADDRESS'), tel: txt(p,'TEL'), pay: txt(p,'PAYEX'), hours: txt(p,'SERVICETIME'), summary: txt(p,'SUMMARY'),
+      lat: +lat.toFixed(6), lng: +lng.toFixed(6),
+      TOTALCAR: num(p,'TOTALCAR'), TOTALMOTOR: num(p,'TOTALMOTOR'), TOTALBUS: num(p,'TOTALBUS'), TOTALLARGEMOTOR: num(p,'TOTALLARGEMOTOR'),
+      ChargingStation: num(p,'ChargingStation'), hc: num(p,'Handicap_First'), preg: num(p,'Pregnancy_First'),
+      feat: ['Taxi_OneHR_Free','AED_Equipment','CellSignal_Enhancement','Accessibility_Elevator','Phone_Charge','Child_Pickup_Area'].filter(t => txt(p,t) === '1'),
+      hcDisc: txt(p,'Handicap_Discount'),
+    };
+    const m = /(\d{2,3})\s*元\s*\/\s*(?:小)?時/.exec(o.pay);
+    o.rate = m ? +m[1] : null;
+    return o;
+  }).filter(p => p.id && Number.isFinite(p.lat));
+  if (!store.set(STORE_KEY, { ts: Date.now(), parks })) toast('瀏覽器儲存空間不足，下次開啟會重新下載清單');
+  return parks;
+}
+
+async function loadLive(){
+  const doc = await fetchXml(SRC.avail);
+  const live = new Map();
+  for (const p of doc.querySelectorAll('PARK')) {
+    const id = txt(p,'ID'); if (!id) continue;
+    const g = { idle:0, busy:0, total:0 };
+    for (const s of p.querySelectorAll('spot_status')) {
+      g.total++; const t = s.textContent.trim();
+      if (t.includes('待機') || t.includes('可用') || t.includes('空')) g.idle++; else if (t.includes('充電')) g.busy++;
+    }
+    live.set(id, {
+      car: num(p,'AVAILABLECAR'), motor: num(p,'AVAILABLEMOTOR'), bus: num(p,'AVAILABLEBUS'),
+      hc: num(p,'AVAILABLEHANDICAP'), preg: num(p,'AVAILABLEPREGNANCY'), heavy: num(p,'AVAILABLEHEAVYMOTOR'),
+      guns: g.total ? g : null,
+    });
+  }
+  state.live = live;
+  state.liveTime = parseFeedTime(txt(doc.documentElement, 'UPDATETIME'));
+  state.liveFetched = new Date();
+}
+
+// ---------- Derived ----------
+// returns {n, total, cls, label}  cls: ok|warn|full|mute
+function availability(park, type = state.type){
+  const lv = state.live.get(park.id);
+  const T = TYPES[type];
+  const total = park[T.total] || 0;
+  if (type === 'charge') {
+    if (!lv || !lv.guns) return { n:null, total, cls:'mute', label: total ? '無即時' : '無充電' };
+    const n = lv.guns.idle;
+    return { n, total: lv.guns.total || total, cls: n === 0 ? 'full' : n <= 2 ? 'warn' : 'ok', label: n === 0 ? '全部使用中' : '可充電' };
+  }
+  const key = { car:'car', motor:'motor', bus:'bus', heavy:'heavy' }[type];
+  if (!lv) return { n:null, total, cls:'mute', label: total ? '無即時' : '無此車格' };
+  const n = lv[key];
+  if (n < 0) return { n:null, total, cls:'mute', label: total ? '無即時' : '無此車格' };
+  if (n === 0) return { n, total, cls:'full', label:'已滿' };
+  const ratio = total > 0 ? n / total : 1;
+  if (n <= 3 || ratio < 0.1) return { n, total, cls:'warn', label:'剩不多' };
+  return { n, total, cls:'ok', label:'有車位' };
+}
+function refPoint(){ return (state.follow && state.me) ? state.me : [map.getCenter().lat, map.getCenter().lng]; }
+function visibleParks(){
+  const q = state.q.trim().toLowerCase();
+  const ref = refPoint();
+  const out = [];
+  for (const p of state.parks) {
+    if (state.area && p.area !== state.area) continue;
+    if (state.onlyFav && !state.fav.has(p.id)) continue;
+    if (q && !(p.name.toLowerCase().includes(q) || p.addr.toLowerCase().includes(q))) continue;
+    const a = availability(p);
+    if (state.type !== 'charge' && !a.total && a.n === null) continue;   // this type doesn't exist here
+    if (state.type === 'charge' && !p.ChargingStation && !(a.total)) continue;
+    if (state.onlyLive && a.n === null) continue;
+    if (state.onlyAvail && a.n === 0) continue;
+    out.push({ p, a, d: haversine(ref, [p.lat, p.lng]) });
+  }
+  out.sort(state.sort === 'avail'
+    ? (x, y) => ((y.a.n ?? -1) - (x.a.n ?? -1)) || (x.d - y.d)
+    : (x, y) => x.d - y.d);
+  return out;
+}
+
+// ---------- Map ----------
+const map = L.map('map', { zoomControl:true, attributionControl:true, preferCanvas:false }).setView(TAIPEI, 14);
+map.zoomControl.setPosition('topright');
+const dark = matchMedia('(prefers-color-scheme: dark)');
+const themeIsDark = () => document.documentElement.dataset.theme === 'dark' || (dark.matches && document.documentElement.dataset.theme !== 'light');
+// 底圖：內政部國土測繪中心「臺灣通用電子地圖」WMTS，免金鑰、開放 CORS，繁中路名。
+// （OSM 公共圖磚會因 tile usage policy 回 403，CARTO 深色圖磚現在要 API key，都不適合自用小站。）
+L.tileLayer('https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}', { maxZoom:19, attribution:'© <a href="https://maps.nlsc.gov.tw/">內政部國土測繪中心</a>' }).addTo(map);
+// 深色模式：同一套圖磚用 CSS 濾鏡反轉
+const setTiles = () => $('#map').classList.toggle('dark-tiles', themeIsDark());
+setTiles();
+dark.addEventListener('change', setTiles);
+
+const cluster = L.markerClusterGroup({ disableClusteringAtZoom:16, maxClusterRadius:48, showCoverageOnHover:false, spiderfyOnMaxZoom:false, chunkedLoading:true });
+map.addLayer(cluster);
+const markers = new Map();   // id -> marker
+let meMarker = null;
+
+function iconFor(a, selected){
+  const mute = a.cls === 'mute';
+  const label = mute ? 'P' : String(a.n);
+  const size = mute ? 22 : 34;
+  return L.divIcon({ className:'pwrap', iconSize:[size,size], iconAnchor:[size/2, size], popupAnchor:[0,-size],
+    html:`<div class="pmark ${a.cls}${selected?' sel':''}${label.length>=4?' w4':''}"><span>${label}</span></div>` });
+}
+function renderMarkers(rows){
+  const keep = new Set();
+  const adds = [];
+  for (const { p, a } of rows) {
+    keep.add(p.id);
+    const sel = state.selected === p.id;
+    let m = markers.get(p.id);
+    if (!m) {
+      m = L.marker([p.lat, p.lng], { icon: iconFor(a, sel) });
+      m.on('click', () => select(p.id, { pan:false }));
+      m._sig = '';
+      markers.set(p.id, m); adds.push(m);
+    }
+    const sig = a.cls + ':' + a.n + ':' + sel;
+    if (m._sig !== sig) { m.setIcon(iconFor(a, sel)); m._sig = sig; }
+    m.setZIndexOffset(sel ? 1000 : a.cls === 'mute' ? -100 : 0);
+  }
+  const dels = [];
+  for (const [id, m] of markers) if (!keep.has(id)) { dels.push(m); markers.delete(id); }
+  if (dels.length) cluster.removeLayers(dels);
+  if (adds.length) cluster.addLayers(adds);
+}
+
+// ---------- List ----------
+const fmtDist = d => d < 1000 ? `${Math.round(d/10)*10} m` : `${(d/1000).toFixed(1)} km`;
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let lastRows = [];
+function renderList(rows){
+  lastRows = rows;
+  const list = $('#list');
+  $('#count').textContent = `${rows.length} 個停車場`;
+  $('#refpt').textContent = (state.follow && state.me) ? '距離你的位置' : '距離地圖中心';
+  if (!rows.length) {
+    list.innerHTML = `<li class="empty">這個範圍沒有符合條件的停車場。<br>試試關掉 <b>只看有空位</b>，或換個行政區。</li>`;
+    return;
+  }
+  const html = [];
+  for (const { p, a, d } of rows.slice(0, 150)) {
+    const n = a.n === null ? `<span class="n">${a.label}</span>` : `<span class="n">${a.n}<small>/${a.total}</small></span>`;
+    html.push(`<li><button class="row" data-id="${p.id}" aria-current="${state.selected===p.id}">
+      <div class="t">${state.fav.has(p.id)?'<span class="fav">★</span>':''}<span class="name">${esc(p.name)}</span></div>
+      <div class="meta"><span class="dist">${fmtDist(d)}</span><span>${esc(p.area)}</span>${p.rate!==null?`<span>${p.rate} 元/時</span>`:''}</div>
+      <div class="av ${a.cls}">${n}<span class="pill ${a.cls}">${a.label}</span></div>
+    </button></li>`);
+  }
+  if (rows.length > 150) html.push(`<li class="empty">只列出最近 150 個，縮小範圍或搜尋看更多。</li>`);
+  list.innerHTML = html.join('');
+}
+
+// ---------- Detail sheet ----------
+const FEAT = { Taxi_OneHR_Free:'計程車 1 小時免費', AED_Equipment:'AED', CellSignal_Enhancement:'手機訊號增強', Accessibility_Elevator:'無障礙電梯', Phone_Charge:'手機充電', Child_Pickup_Area:'兒童接送區' };
+function renderSheet(id){
+  const p = state.byId.get(id); if (!p) return;
+  const lv = state.live.get(id);
+  const slot = (type, label) => {
+    const a = availability(p, type);
+    if (!a.total && a.n === null) return '';
+    const v = a.n === null ? `<span class="v">${a.label}</span>` : `<span class="v">${a.n}<small> / ${a.total}</small></span>`;
+    return `<div class="slot ${a.cls}"><div class="k">${label}</div>${v}</div>`;
+  };
+  const extra = (lv && lv.hc >= 0 && p.hc) ? `<div class="slot ${lv.hc?'ok':'full'}"><div class="k">身障</div><span class="v">${lv.hc}<small> / ${p.hc}</small></span></div>` : '';
+  const preg  = (lv && lv.preg >= 0 && p.preg) ? `<div class="slot ${lv.preg?'ok':'full'}"><div class="k">婦幼</div><span class="v">${lv.preg}<small> / ${p.preg}</small></span></div>` : '';
+  let guns = '';
+  if (lv && lv.guns) {
+    guns = `<div><div class="k" style="font-size:12px;color:var(--fg-2)">充電槍 ${lv.guns.idle} 支可用 / 共 ${lv.guns.total} 支</div>
+      <div class="guns" style="margin-top:6px">${'<i class="gun idle"></i>'.repeat(lv.guns.idle)}${'<i class="gun busy"></i>'.repeat(lv.guns.busy)}${'<i class="gun"></i>'.repeat(Math.max(0, lv.guns.total-lv.guns.idle-lv.guns.busy))}</div></div>`;
+  }
+  const gmaps = `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}&travelmode=driving`;
+  const amaps = `https://maps.apple.com/?daddr=${p.lat},${p.lng}&dirflg=d`;
+  const feats = [...p.feat.map(f => FEAT[f]), p.hcDisc === '是' ? '身障優惠' : null].filter(Boolean);
+  $('#sheetbody').innerHTML = `
+    <header>
+      <div><h2>${esc(p.name)}</h2><div class="addr"><span class="area">${esc(p.area)}</span>${esc(p.addr)}</div></div>
+      <button class="closebtn" id="closesheet" aria-label="關閉">✕</button>
+    </header>
+    <div class="slots">${slot('car','小型車')}${slot('motor','機車')}${slot('heavy','大重機')}${slot('bus','大客車')}${extra}${preg}${p.ChargingStation ? slot('charge','充電格') : ''}</div>
+    ${guns}
+    <div class="actions">
+      <a class="btn primary" href="${gmaps}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8z"/></svg>Google 導航</a>
+      <a class="btn" href="${amaps}" target="_blank" rel="noopener">Apple 地圖</a>
+      <button class="btn star" id="favbtn" aria-pressed="${state.fav.has(p.id)}">${state.fav.has(p.id)?'★ 已收藏':'☆ 收藏'}</button>
+    </div>
+    <dl class="kv">
+      <dt>費率</dt><dd>${esc(p.pay) || '未提供'}</dd>
+      <dt>營業</dt><dd>${esc(p.hours) || '未提供'}</dd>
+      ${p.tel ? `<dt>電話</dt><dd><a href="tel:${esc(p.tel.replace(/[^\d+#]/g,''))}">${esc(p.tel)}</a></dd>` : ''}
+      <dt>類型</dt><dd>${esc(p.kind)}${p.live ? '' : '（無即時車位資料）'}</dd>
+      <dt>格位</dt><dd>${esc(p.summary)}</dd>
+      <dt>編號</dt><dd>${esc(p.id)}</dd>
+    </dl>
+    ${feats.length ? `<div class="feats">${feats.map(f => `<span>${f}</span>`).join('')}</div>` : ''}
+  `;
+  $('#closesheet').onclick = () => select(null);
+  $('#favbtn').onclick = () => {
+    if (state.fav.has(p.id)) state.fav.delete(p.id); else state.fav.add(p.id);
+    store.set(FAV_KEY, [...state.fav]); renderSheet(id); refresh();
+  };
+  const sh = $('#sheet'); sh.classList.add('open'); sh.setAttribute('aria-hidden', 'false');
+}
+function select(id, { pan=true } = {}){
+  const prev = state.selected;
+  state.selected = id;
+  if (id) {
+    const p = state.byId.get(id);
+    if (p && pan) map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), 16), { duration:.5 });
+    renderSheet(id);
+  } else {
+    const sh = $('#sheet'); sh.classList.remove('open'); sh.setAttribute('aria-hidden', 'true');
+  }
+  for (const x of [prev, id]) { const m = x && markers.get(x); if (m) { const r = lastRows.find(r => r.p.id === x); if (r) { m.setIcon(iconFor(r.a, x === id)); m._sig = ''; } } }
+  for (const b of $('#list').querySelectorAll('.row')) b.setAttribute('aria-current', b.dataset.id === id);
+}
+
+// ---------- Status line ----------
+function renderStatus(){
+  const el = $('#status');
+  if (!state.liveFetched) { el.textContent = '尚未取得即時資料'; return; }
+  const t = state.liveTime;
+  const hhmm = t ? t.toLocaleTimeString('zh-TW', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Taipei' }) : '—';
+  const age = t ? Math.round((Date.now() - t.getTime()) / 60000) : null;
+  const stale = age !== null && age >= 10;
+  el.classList.toggle('stale', stale);
+  el.innerHTML = `停管處資料時間 <b>${hhmm}</b>${age !== null ? `（${age < 1 ? '不到 1 分鐘前' : age + ' 分鐘前'}）` : ''}${stale ? ' ⚠ 來源久未更新' : ''}`;
+}
+
+// ---------- Refresh orchestration ----------
+let liveTimer = null, refreshing = false;
+function refresh(){ const rows = visibleParks(); renderMarkers(rows); renderList(rows); renderStatus(); }
+async function pullLive(manual=false){
+  if (refreshing) return; refreshing = true;
+  $('#refresh').classList.add('spin');
+  try { await loadLive(); refresh(); if (manual) toast('已更新'); }
+  catch (e) { console.error(e); toast('即時資料抓不到，稍後再試：' + e.message); renderStatus(); }
+  finally { refreshing = false; $('#refresh').classList.remove('spin'); }
+}
+function schedule(){
+  clearInterval(liveTimer);
+  liveTimer = setInterval(() => { if (document.visibilityState === 'visible') pullLive(); }, LIVE_INTERVAL);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.liveFetched && Date.now() - state.liveFetched > 30_000) pullLive();
+});
+setInterval(renderStatus, 15_000);
+
+// ---------- UI wiring ----------
+let toastTimer;
+function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600); }
+
+$('#refresh').onclick = () => pullLive(true);
+for (const b of $('#typechips').querySelectorAll('[data-type]')) {
+  b.setAttribute('aria-pressed', b.dataset.type === state.type);
+  b.onclick = () => { state.type = b.dataset.type; for (const x of $('#typechips').querySelectorAll('[data-type]')) x.setAttribute('aria-pressed', x === b); savePref(); refresh(); };
+}
+const toggle = (id, key) => { const b = $(id); b.setAttribute('aria-pressed', state[key]); b.onclick = () => { state[key] = !state[key]; b.setAttribute('aria-pressed', state[key]); savePref(); refresh(); }; };
+toggle('#onlyavail', 'onlyAvail'); toggle('#onlylive', 'onlyLive'); toggle('#onlyfav', 'onlyFav');
+for (const b of document.querySelectorAll('.sortbtn')) {
+  b.setAttribute('aria-pressed', b.dataset.sort === state.sort);
+  b.onclick = () => { state.sort = b.dataset.sort; for (const x of document.querySelectorAll('.sortbtn')) x.setAttribute('aria-pressed', x === b); savePref(); refresh(); };
+}
+$('#area').onchange = e => { state.area = e.target.value; savePref(); refresh();
+  if (state.area) { const pts = state.parks.filter(p => p.area === state.area).map(p => [p.lat, p.lng]); if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding:[20,20] }); } };
+let qTimer; $('#search').oninput = e => { clearTimeout(qTimer); qTimer = setTimeout(() => { state.q = e.target.value; refresh(); }, 180); };
+$('#list').addEventListener('click', e => { const b = e.target.closest('.row'); if (b) select(b.dataset.id); });
+
+let moveTimer;
+map.on('moveend', () => { clearTimeout(moveTimer); moveTimer = setTimeout(() => { if (!(state.follow && state.me)) refresh(); }, 150); });
+map.on('dragstart', () => { if (state.follow) { state.follow = false; $('#locate').dataset.on = 'false'; } });
+
+$('#locate').onclick = () => {
+  if (!navigator.geolocation) { toast('這個瀏覽器不支援定位'); return; }
+  const btn = $('#locate'); btn.classList.add('busy');
+  navigator.geolocation.getCurrentPosition(pos => {
+    btn.classList.remove('busy');
+    state.me = [pos.coords.latitude, pos.coords.longitude]; state.follow = true; btn.dataset.on = 'true';
+    if (!meMarker) meMarker = L.marker(state.me, { icon: L.divIcon({ className:'mewrap', iconSize:[18,18], html:'<div class="me"></div>' }), interactive:false, zIndexOffset:2000 }).addTo(map);
+    else meMarker.setLatLng(state.me);
+    map.flyTo(state.me, Math.max(map.getZoom(), 15), { duration:.6 });
+    refresh();
+  }, err => {
+    btn.classList.remove('busy');
+    toast(err.code === 1 ? '沒有定位權限。可改用地圖中心找附近車位。' : (location.protocol === 'file:' ? '用 file:// 開啟時瀏覽器不給定位，請改用 http 伺服器或上線網址。' : '定位失敗：' + err.message));
+  }, { enableHighAccuracy:true, timeout:10000, maximumAge:30000 });
+};
+
+// sheet swipe-down to close (touch)
+(() => { let y0 = null; const sh = $('#sheet');
+  sh.addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive:true });
+  sh.addEventListener('touchend', e => { if (y0 !== null && e.changedTouches[0].clientY - y0 > 80 && $('#sheetbody').scrollTop === 0) select(null); y0 = null; }, { passive:true });
+})();
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.selected) select(null); });
+
+// ---------- Boot ----------
+(async () => {
+  try {
+    state.parks = await loadStatic();
+  } catch (e) {
+    console.error(e);
+    const cached = store.get(STORE_KEY);
+    if (cached && cached.parks) { state.parks = cached.parks; toast('清單更新失敗，先用上次的資料'); }
+    else { $('#bootmsg').textContent = '抓不到停車場清單：' + e.message + '。請確認網路後重新整理。'; $('#boot .bar').hidden = true; return; }
+  }
+  state.byId = new Map(state.parks.map(p => [p.id, p]));
+  const areas = [...new Set(state.parks.map(p => p.area))].sort((a,b) => a.localeCompare(b,'zh-Hant'));
+  const sel = $('#area');
+  for (const a of areas) { const o = document.createElement('option'); o.value = a; o.textContent = a; sel.appendChild(o); }
+  sel.value = state.area || '';
+  $('#bootmsg').textContent = '取得即時車位…';
+  await pullLive();
+  $('#boot').hidden = true;
+  schedule();
+  setTimeout(() => map.invalidateSize(), 50);
+})();
+})();
+</script>
+</body>
+</html>
