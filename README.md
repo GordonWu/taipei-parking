@@ -28,6 +28,8 @@
 - `roadSegAvail` 是官方的路段剩餘格數，`-99` 表示沒資料；網頁以它為準，沒有時才用感測格數推算。
 - `cellStatus`：`1` 有車、`2` 空位、其他視為異常。感測格數常少於路段總格數（只有部分格位埋地磁）。
 - `psId`（感測器編號）對不上 SHP 的格位編號，所以地圖放大後只畫每一格的位置，顏色跟路段一致，**不會標出是哪一格空**。
+- SHP 有 9 萬多格沒填 `rdcode`，建檔時改用路名對到路段（先用 SHP 自己有代碼的同名格位，再用即時檔的路段名）；只掛汽車類格位（小型車、身障、裝卸、彈性共用等），機車格不掛以免掛錯。
+- 路邊模式預設**不**過濾「只看有空位」，已滿路段以紅色 0/N 顯示，才不會以為那條路不存在。
 
 ## 怎麼開
 
@@ -50,7 +52,8 @@ python3 -m http.server 8765
 ```bash
 pip install pyshp
 # 從 data.taipei 下載「臺北市路邊停車格位」SHP 並解壓，然後：
-python3 tools/build_street_geo.py /path/to/park01_YYYYMMDDHHMM
+curl -sL https://tcgbusfs.blob.core.windows.net/blobtcmsv/TCMSV_roadquery.xml -o /tmp/roadquery.xml
+python3 tools/build_street_geo.py /path/to/park01_YYYYMMDDHHMM --xml /tmp/roadquery.xml
 git add street_geo.json && git commit -m "更新路邊格位座標" && git push
 ```
 

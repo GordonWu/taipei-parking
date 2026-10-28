@@ -402,6 +402,7 @@ const state = {
   streets: new Map(),   // rdcode -> item (merged live + geo)
   streetGeo: null, streetTime: null, streetFetched: null,
   type: 'car', area: '', onlyAvail: true, onlyLive: true, onlyFav: false, sort: 'dist', q: '',
+  onlyAvailS: false, onlyLiveS: false,   // 路邊模式另記一套:預設不過濾,已滿路段要看得到
   fav: new Set(),
   me: null,             // [lat,lng]
   follow: false,
@@ -415,7 +416,8 @@ const store = {
   const p = store.get(PREF_KEY); if (p) Object.assign(state, p);
   const f = store.get(FAV_KEY);  if (Array.isArray(f)) state.fav = new Set(f);
 })();
-const savePref = () => store.set(PREF_KEY, { mode:state.mode, type:state.type, area:state.area, onlyAvail:state.onlyAvail, onlyLive:state.onlyLive, onlyFav:state.onlyFav, sort:state.sort });
+const savePref = () => store.set(PREF_KEY, { mode:state.mode, type:state.type, area:state.area, onlyAvail:state.onlyAvail, onlyLive:state.onlyLive, onlyAvailS:state.onlyAvailS, onlyLiveS:state.onlyLiveS, onlyFav:state.onlyFav, sort:state.sort });
+const fkey = k => state.mode === 'street' ? k + 'S' : k;   // onlyAvail / onlyLive 依模式取不同鍵
 
 // ---------- TWD97 TM2 -> WGS84 ----------
 function tw97ToWgs84(x, y){
@@ -587,8 +589,8 @@ function visibleParks(){
       if (state.onlyFav && !state.fav.has(st.id)) continue;
       if (q && !st.name.toLowerCase().includes(q)) continue;
       const a = streetAvailability(st);
-      if (state.onlyLive && a.n === null) continue;
-      if (state.onlyAvail && a.n === 0) continue;
+      if (state.onlyLiveS && a.n === null) continue;
+      if (state.onlyAvailS && a.n === 0) continue;
       out.push({ p: st, a, d: haversine(ref, [st.lat, st.lng]) });
     }
     out.sort(state.sort === 'avail' ? (x, y) => ((y.a.n ?? -1) - (x.a.n ?? -1)) || (x.d - y.d) : (x, y) => x.d - y.d);
@@ -838,6 +840,8 @@ function setMode(mode){
   for (const b of $('#modes').querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', b.dataset.mode === mode);
   $('#typegroup').hidden = mode === 'street';
   $('#search').placeholder = mode === 'street' ? '搜尋路名（例：忠孝東路、市民大道）' : '搜尋停車場或路名（例：信義、市府）';
+  $('#onlylive').textContent = mode === 'street' ? '只看有感測' : '只看有即時資料';
+  syncToggles();
   select(null);
   cluster.clearLayers(); markers.clear(); cellLayer.clearLayers();
   schedule();
@@ -874,8 +878,11 @@ for (const b of $('#typechips').querySelectorAll('[data-type]')) {
   b.setAttribute('aria-pressed', b.dataset.type === state.type);
   b.onclick = () => { state.type = b.dataset.type; for (const x of $('#typechips').querySelectorAll('[data-type]')) x.setAttribute('aria-pressed', x === b); savePref(); refresh(); };
 }
-const toggle = (id, key) => { const b = $(id); b.setAttribute('aria-pressed', state[key]); b.onclick = () => { state[key] = !state[key]; b.setAttribute('aria-pressed', state[key]); savePref(); refresh(); }; };
-toggle('#onlyavail', 'onlyAvail'); toggle('#onlylive', 'onlyLive'); toggle('#onlyfav', 'onlyFav');
+const toggles = [['#onlyavail', 'onlyAvail'], ['#onlylive', 'onlyLive'], ['#onlyfav', 'onlyFav']];
+const syncToggles = () => { for (const [id, key] of toggles) $(id).setAttribute('aria-pressed', !!state[key === 'onlyFav' ? key : fkey(key)]); };
+for (const [id, key] of toggles) $(id).onclick = () => { const k = key === 'onlyFav' ? key : fkey(key); state[k] = !state[k]; syncToggles(); savePref(); refresh(); };
+syncToggles();
+$('#onlylive').textContent = '只看有即時資料';
 for (const b of document.querySelectorAll('.sortbtn')) {
   b.setAttribute('aria-pressed', b.dataset.sort === state.sort);
   b.onclick = () => { state.sort = b.dataset.sort; for (const x of document.querySelectorAll('.sortbtn')) x.setAttribute('aria-pressed', x === b); savePref(); refresh(); };
